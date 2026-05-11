@@ -150,11 +150,25 @@ export async function GET(request: NextRequest) {
       (data.shopping_results as Record<string, unknown>[]) || []
     ).map(parseDrinkResult);
 
+    const parseDistMiles = (d: string | null): number | null => {
+      if (!d) return null;
+      if (d.toLowerCase() === "nearby") return 0;
+      const m = d.match(/([\d.]+)\s*mi/);
+      return m ? parseFloat(m[1]) : null;
+    };
+
     const shoppingResults = allResults
       .sort((a, b) => {
-        const aLocal = a.distance !== null ? 0 : 1;
-        const bLocal = b.distance !== null ? 0 : 1;
-        if (aLocal !== bLocal) return aLocal - bLocal;
+        const aDist = parseDistMiles(a.distance);
+        const bDist = parseDistMiles(b.distance);
+        // Local items first
+        if (aDist !== null && bDist === null) return -1;
+        if (aDist === null && bDist !== null) return 1;
+        // Both local: sort by distance (closer first)
+        if (aDist !== null && bDist !== null) {
+          if (aDist !== bDist) return aDist - bDist;
+        }
+        // Same locality tier: sort by price
         return (a.price ?? Infinity) - (b.price ?? Infinity);
       });
 

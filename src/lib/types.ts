@@ -56,6 +56,7 @@ export interface PartyResponse {
 
 export interface CocktailResponse {
   name: string;
+  searchedName?: string;
   glass: string;
   instructions: string;
   thumbnail: string | null;

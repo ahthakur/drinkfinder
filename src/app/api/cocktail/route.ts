@@ -103,6 +103,62 @@ function parseResultBottleMl(title: string): number | null {
   return null;
 }
 
+function parseDistanceMiles(extensions: string[]): number | null {
+  for (const e of extensions) {
+    if (e.toLowerCase() === "nearby") return 0;
+    const match = e.match(/([\d.]+)\s*mi/);
+    if (match) return parseFloat(match[1]);
+  }
+  return null;
+}
+
+function pickBestResult(results: Record<string, unknown>[]): Record<string, unknown> | null {
+  // Score each result: local+close beats local+far beats online+cheap
+  let best: Record<string, unknown> | null = null;
+  let bestScore = -Infinity;
+
+  for (const item of results) {
+    const price = item.extracted_price as number | undefined;
+    if (price == null) continue;
+    const extensions = (item.extensions as string[]) || [];
+    const dist = parseDistanceMiles(extensions);
+
+    // Scoring: local items get a big boost, closer = better, cheaper = better
+    let score = 0;
+    if (dist !== null) {
+      score += 1000; // local boost
+      score -= dist * 10; // penalize distance (10 pts per mile)
+    }
+    score -= price; // cheaper is better
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = item;
+    }
+  }
+  return best;
+}
+
+function resultToDrink(item: Record<string, unknown>): DrinkResult {
+  const extensions = (item.extensions as string[]) || [];
+  const distance =
+    extensions.find(
+      (e) => e.includes("mi") || e.includes("mile") || e.includes("Nearby")
+    ) || null;
+  return {
+    title: (item.title as string) || "",
+    price: (item.extracted_price as number) ?? null,
+    oldPrice: null,
+    source: (item.source as string) || "",
+    rating: (item.rating as number) ?? null,
+    reviews: (item.reviews as number) ?? null,
+    distance,
+    saleTags: [],
+    thumbnail: (item.thumbnail as string) || null,
+    link: (item.product_link as string) || (item.link as string) || null,
+  };
+}
+
 async function fetchCheapestProduct(
   query: string,
   location: string,
@@ -125,48 +181,9 @@ async function fetchCheapestProduct(
     const results = (data.shopping_results as Record<string, unknown>[]) || [];
     if (results.length === 0) return null;
 
-    let localBest: Record<string, unknown> | null = null;
-    let localBestPrice = Infinity;
-    let onlineBest: Record<string, unknown> | null = null;
-    let onlineBestPrice = Infinity;
-
-    for (const item of results) {
-      const price = item.extracted_price as number | undefined;
-      if (price == null) continue;
-      const extensions = (item.extensions as string[]) || [];
-      const isLocal = extensions.some(
-        (e) => e.includes("mi") || e.includes("mile") || e.includes("Nearby")
-      );
-      if (isLocal && price < localBestPrice) {
-        localBestPrice = price;
-        localBest = item;
-      } else if (!isLocal && price < onlineBestPrice) {
-        onlineBestPrice = price;
-        onlineBest = item;
-      }
-    }
-
-    const cheapest = localBest || onlineBest;
-    if (!cheapest) return null;
-
-    const extensions = (cheapest.extensions as string[]) || [];
-    const distance =
-      extensions.find(
-        (e) => e.includes("mi") || e.includes("mile") || e.includes("Nearby")
-      ) || null;
-
-    return {
-      title: (cheapest.title as string) || "",
-      price: (cheapest.extracted_price as number) ?? null,
-      oldPrice: null,
-      source: (cheapest.source as string) || "",
-      rating: (cheapest.rating as number) ?? null,
-      reviews: (cheapest.reviews as number) ?? null,
-      distance,
-      saleTags: [],
-      thumbnail: (cheapest.thumbnail as string) || null,
-      link: (cheapest.product_link as string) || (cheapest.link as string) || null,
-    };
+    const best = pickBestResult(results);
+    if (!best) return null;
+    return resultToDrink(best);
   } catch {
     return null;
   }
@@ -197,14 +214,9 @@ async function fetchBestBottle(
     const results = (data.shopping_results as Record<string, unknown>[]) || [];
     if (results.length === 0) return null;
 
-    let localSizeMatch: Record<string, unknown> | null = null;
-    let localSizePrice = Infinity;
-    let localFallback: Record<string, unknown> | null = null;
-    let localFallbackPrice = Infinity;
-    let onlineSizeMatch: Record<string, unknown> | null = null;
-    let onlineSizePrice = Infinity;
-    let onlineFallback: Record<string, unknown> | null = null;
-    let onlineFallbackPrice = Infinity;
+    // Score results: prefer size match + close + cheap
+    let best: Record<string, unknown> | null = null;
+    let bestScore = -Infinity;
 
     for (const item of results) {
       const price = item.extracted_price as number | undefined;
@@ -212,41 +224,25 @@ async function fetchBestBottle(
       const title = (item.title as string) || "";
       const bottleMl = parseResultBottleMl(title);
       const extensions = (item.extensions as string[]) || [];
-      const isLocal = extensions.some(
-        (e) => e.includes("mi") || e.includes("mile") || e.includes("Nearby")
-      );
+      const dist = parseDistanceMiles(extensions);
       const sizeMatch = bottleMl && bottleMl >= targetSizeMl * 0.9 && bottleMl <= targetSizeMl * 1.5;
 
-      if (isLocal) {
-        if (sizeMatch && price < localSizePrice) { localSizePrice = price; localSizeMatch = item; }
-        if (price < localFallbackPrice) { localFallbackPrice = price; localFallback = item; }
-      } else {
-        if (sizeMatch && price < onlineSizePrice) { onlineSizePrice = price; onlineSizeMatch = item; }
-        if (price < onlineFallbackPrice) { onlineFallbackPrice = price; onlineFallback = item; }
+      let score = 0;
+      if (dist !== null) {
+        score += 1000; // local boost
+        score -= dist * 10; // closer = better
+      }
+      if (sizeMatch) score += 500; // right size boost
+      score -= price; // cheaper = better
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = item;
       }
     }
 
-    const chosen = localSizeMatch || localFallback || onlineSizeMatch || onlineFallback;
-    if (!chosen) return null;
-
-    const extensions = (chosen.extensions as string[]) || [];
-    const distance =
-      extensions.find(
-        (e) => e.includes("mi") || e.includes("mile") || e.includes("Nearby")
-      ) || null;
-
-    return {
-      title: (chosen.title as string) || "",
-      price: (chosen.extracted_price as number) ?? null,
-      oldPrice: null,
-      source: (chosen.source as string) || "",
-      rating: (chosen.rating as number) ?? null,
-      reviews: (chosen.reviews as number) ?? null,
-      distance,
-      saleTags: [],
-      thumbnail: (chosen.thumbnail as string) || null,
-      link: (chosen.product_link as string) || (chosen.link as string) || null,
-    };
+    if (!best) return null;
+    return resultToDrink(best);
   } catch {
     return null;
   }
@@ -276,21 +272,35 @@ export async function GET(request: NextRequest) {
     baseData = cached.data;
   } else {
     try {
-      const cocktailRes = await fetch(
-        `https://www.thecocktaildb.com/api/json/v1/1/search.php?s=${encodeURIComponent(name)}`
-      );
-      if (!cocktailRes.ok) {
-        return Response.json({ error: "Failed to fetch cocktail recipe" }, { status: 502 });
+      // Try exact match first, then progressively strip words to find base cocktail
+      let drink = null;
+      let matchedName = name;
+      const namesToTry = [name];
+
+      // Generate fallback names by stripping leading words one at a time
+      // "mango margarita" → ["mango margarita", "margarita"]
+      // "spicy mango margarita" → ["spicy mango margarita", "mango margarita", "margarita"]
+      const words = name.trim().split(/\s+/);
+      for (let i = 1; i < words.length; i++) {
+        namesToTry.push(words.slice(i).join(" "));
       }
 
-      const cocktailData = await cocktailRes.json();
-      const drinks = cocktailData.drinks;
+      for (const tryName of namesToTry) {
+        const cocktailRes = await fetch(
+          `https://www.thecocktaildb.com/api/json/v1/1/search.php?s=${encodeURIComponent(tryName)}`
+        );
+        if (!cocktailRes.ok) continue;
+        const cocktailData = await cocktailRes.json();
+        if (cocktailData.drinks && cocktailData.drinks.length > 0) {
+          drink = cocktailData.drinks[0];
+          matchedName = tryName;
+          break;
+        }
+      }
 
-      if (!drinks || drinks.length === 0) {
+      if (!drink) {
         return Response.json({ found: false });
       }
-
-      const drink = drinks[0];
       const rawIngredients: { name: string; measure: string }[] = [];
 
       for (let i = 1; i <= 15; i++) {
@@ -329,7 +339,8 @@ export async function GET(request: NextRequest) {
           : null;
 
       baseData = {
-        name: drink.strDrink || name,
+        name: drink.strDrink || matchedName,
+        ...(matchedName.toLowerCase() !== name.toLowerCase() ? { searchedName: name } : {}),
         glass: drink.strGlass || "",
         instructions: drink.strInstructions || "",
         thumbnail: drink.strDrinkThumb || null,

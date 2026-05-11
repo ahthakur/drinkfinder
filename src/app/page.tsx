@@ -481,6 +481,11 @@ function CocktailCard({ cocktail, location }: { cocktail: CocktailResponse; loca
             )}
             <div className="flex-1 min-w-0">
               <h2 className="text-lg font-bold">{cocktail.name}</h2>
+              {cocktail.searchedName && (
+                <p className="text-xs text-amber-600 mt-0.5">
+                  Closest recipe for &ldquo;{cocktail.searchedName}&rdquo;
+                </p>
+              )}
               {cocktail.glass && (
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Served in a {cocktail.glass.toLowerCase()}
