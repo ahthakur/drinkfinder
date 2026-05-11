@@ -662,7 +662,11 @@ export default function Home() {
           const state = data.address?.state || "";
           const zip = data.address?.postcode || "";
           if (city && state) {
-            setLocation(`${city}, ${state}, United States`);
+            // Use zip code in location for more precise SerpApi results
+            const locationStr = zip
+              ? `${city}, ${state} ${zip}, United States`
+              : `${city}, ${state}, United States`;
+            setLocation(locationStr);
             setLocationDisplay(`${city}, ${state}${zip ? ` ${zip}` : ""}`);
           } else {
             setLocationDisplay("Enter zip code");
