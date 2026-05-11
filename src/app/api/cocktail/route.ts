@@ -27,6 +27,27 @@ const NON_ALCOHOLIC = new Set([
   "olive", "cherry", "maraschino cherry",
 ]);
 
+// Spirit/ingredient names that should never trigger cocktail recipe lookup
+const SPIRIT_NAMES = new Set([
+  "vodka", "tequila", "rum", "gin", "whiskey", "whisky", "bourbon",
+  "scotch", "brandy", "cognac", "mezcal", "sake", "soju",
+  "kahlua", "baileys", "amaretto", "campari", "aperol", "vermouth",
+  "absinthe", "chartreuse", "cointreau", "curacao", "triple sec",
+  "schnapps", "limoncello", "sambuca", "grappa", "pisco",
+  "beer", "wine", "champagne", "prosecco", "cider", "mead",
+  "riesling", "chardonnay", "pinot", "merlot", "cabernet",
+  "ipa", "lager", "stout", "ale", "porter", "pilsner",
+  "hennessy", "grey goose", "patron", "don julio", "jack daniels",
+  "jameson", "crown royal", "smirnoff", "bacardi", "captain morgan",
+  "jose cuervo", "absolut", "ketel one", "belvedere", "ciroc",
+  "makers mark", "bulleit", "woodford reserve", "buffalo trace",
+  "fireball", "jagermeister", "malibu", "midori",
+]);
+
+function isSpirit(query: string): boolean {
+  return SPIRIT_NAMES.has(query.toLowerCase().trim());
+}
+
 const BOTTLE_SIZES_ML = [375, 750, 1000, 1750];
 
 function isAlcoholic(ingredient: string): boolean {
@@ -258,6 +279,11 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: "Parameter 'name' is required" }, { status: 400 });
   }
 
+  // Spirit/ingredient names should go to shopping, not recipe lookup
+  if (isSpirit(name)) {
+    return Response.json({ found: false });
+  }
+
   const apiKey = process.env.SERPAPI_API_KEY;
   if (!apiKey) {
     return Response.json({ error: "API key not configured" }, { status: 500 });
@@ -286,15 +312,29 @@ export async function GET(request: NextRequest) {
       }
 
       for (const tryName of namesToTry) {
+        // Skip if this stripped name is a spirit/ingredient
+        if (isSpirit(tryName)) continue;
+
         const cocktailRes = await fetch(
           `https://www.thecocktaildb.com/api/json/v1/1/search.php?s=${encodeURIComponent(tryName)}`
         );
         if (!cocktailRes.ok) continue;
         const cocktailData = await cocktailRes.json();
         if (cocktailData.drinks && cocktailData.drinks.length > 0) {
-          drink = cocktailData.drinks[0];
-          matchedName = tryName;
-          break;
+          // CocktailDB returns prefix matches — only accept if the cocktail name
+          // matches what we searched for (exact or contains the search term as a full word)
+          const bestMatch = cocktailData.drinks.find(
+            (d: Record<string, unknown>) =>
+              (d.strDrink as string).toLowerCase() === tryName.toLowerCase()
+          ) || cocktailData.drinks.find(
+            (d: Record<string, unknown>) =>
+              (d.strDrink as string).toLowerCase().includes(tryName.toLowerCase())
+          );
+          if (bestMatch) {
+            drink = bestMatch;
+            matchedName = tryName;
+            break;
+          }
         }
       }
 
